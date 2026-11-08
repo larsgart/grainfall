@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "lars.grainfall",
+  "name": "Grainfall",
+  "version": "0.1.0",
+  "author": "Lars Gartenberg",
+  "description": "Falling-block puzzle where pieces crumble into sand. Join one colour from wall to wall to clear it. Follows the active Omarchy theme.",
+  "kinds": [
+    "bar-widget",
+    "panel"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "panel": "Grainfall.qml"
+  },
+  "barWidget": {
+    "displayName": "Grainfall",
+    "description": "Open the Grainfall sand puzzle",
+    "category": "Fun",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
