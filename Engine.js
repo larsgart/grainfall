@@ -7,6 +7,8 @@
 //   flips    - every so often the board turns upside down and the pile pours
 //   elements - some pieces are water (dye), fire, acid or seeds (vines)
 //   groove   - sand physics follow the loudness of the music that is playing
+//   rising   - the floor creeps up, faster and faster, lifting the pile
+//              toward the top; clears push it back down a little
 //
 // Pure JavaScript with no QML dependencies so it can be unit tested in node.
 
@@ -66,6 +68,12 @@ var GROOVE_STICKY_SLIDE = 0.002
 var GROOVE_MAX_DRIFT = 0.3
 var BEAT_DRIFT = 0.45
 
+var RISE_GRACE_MS = 5000      // calm start before the floor begins to move
+var RISE_START_SPEED = 0.6    // grain rows per second once it starts
+var RISE_ACCEL = 0.02         // extra rows per second, for every second it has risen
+var RISE_MAX_SPEED = 8
+var RISE_PUSHBACK = 1         // rows the floor sinks for each region cleared
+
 // ------------------------------------------------------------------ cells
 
 // Materials, stored in the top three bits of a cell.
@@ -75,6 +83,7 @@ var FIRE = 2
 var ACID = 3
 var SPROUT = 4
 var VINE = 5
+var FLOOR = 6
 
 var NO_COLOR = -1
 var FULL_LIFE = 3
@@ -185,6 +194,7 @@ function newGame(options) {
     colors: Math.max(2, Math.min(6, options.colors || 4)),
     flips: options.flips === true,
     elements: options.elements === true,
+    rising: options.rising === true,
     random: makeRandom(options.seed),
     bag: [],
     piecesDealt: 0,
@@ -210,6 +220,10 @@ function newGame(options) {
     pouring: false,
     pourMs: 0,
     flipIn: 0,
+    floorRows: 0,
+    riseMs: 0,
+    riseCarry: 0,
+    floorDrop: 0,
     groove: { active: false, slide: 1, liquid: 0 },
     shake: 0,
     frame: 0,
@@ -553,7 +567,7 @@ function stepAcid(state, index, x, y) {
       cells[index] = 0
       return true
     }
-    if (target !== 0 && cellMaterial(target) !== ACID && random() < ACID_EAT) {
+    if (target !== 0 && cellMaterial(target) !== ACID && cellMaterial(target) !== FLOOR && random() < ACID_EAT) {
       cells[below] = 0
       state.dissolved++
       if (spendLife(cells, index)) moveCell(state, index, below)
@@ -644,7 +658,7 @@ function stepCell(state, index, x, y, slide, drift) {
   case FIRE: return stepFire(state, index, x, y)
   case ACID: return stepAcid(state, index, x, y)
   case SPROUT: return stepSprout(state, index, x, y)
-  default: return false   // vines stay rooted where they grew
+  default: return false   // vines stay rooted where they grew; the floor never moves
   }
 }
 
@@ -695,6 +709,7 @@ function startClear(state, spans) {
   state.chain++
   state.bestChain = Math.max(state.bestChain, state.chain)
   state.clears += spans.length
+  if (state.rising) state.floorDrop += spans.length * RISE_PUSHBACK
   var points = grains.length * state.chain * state.level * bonus
   state.score += points
   state.level = Math.max(state.level, 1 + Math.floor(state.clears / CLEARS_PER_LEVEL))
@@ -707,6 +722,8 @@ function finishClear(state) {
   for (var i = 0; i < state.flashing.length; i++) state.cells[state.flashing[i]] = 0
   state.flashing = null
   state.sandActive = true
+  lowerFloor(state, state.floorDrop)
+  state.floorDrop = 0
 }
 
 // ------------------------------------------------------------------- flips
@@ -719,7 +736,7 @@ function scheduleFlip(state, first) {
 // Turn the board upside down. The falling piece is held until the pour
 // settles; clears made while it pours score double.
 function flip(state) {
-  mirrorRows(state.cells)
+  mirrorRows(state.cells, HEIGHT - state.floorRows)   // the rising floor stays put
   tearVinesLoose(state.cells)
   if (state.piece) state.heldPiece = state.piece
   state.piece = null
@@ -731,8 +748,8 @@ function flip(state) {
   scheduleFlip(state, false)
 }
 
-function mirrorRows(cells) {
-  for (var top = 0, bottom = HEIGHT - 1; top < bottom; top++, bottom--) {
+function mirrorRows(cells, rows) {
+  for (var top = 0, bottom = rows - 1; top < bottom; top++, bottom--) {
     var a = top * WIDTH, b = bottom * WIDTH
     for (var x = 0; x < WIDTH; x++) {
       var swap = cells[a + x]; cells[a + x] = cells[b + x]; cells[b + x] = swap
@@ -758,6 +775,62 @@ function finishPour(state) {
 function flipCountdown(state) {
   if (!state.flips || state.pouring || state.flipIn > FLIP_WARNING_MS) return 0
   return Math.max(1, Math.ceil(state.flipIn / 1000))
+}
+
+// ------------------------------------------------------------------ rising
+
+// Grain rows per second the floor is rising at, or 0 before it has started.
+function riseSpeed(state) {
+  var risingMs = state.riseMs - RISE_GRACE_MS
+  if (!state.rising || risingMs <= 0) return 0
+  return Math.min(RISE_MAX_SPEED, RISE_START_SPEED + RISE_ACCEL * risingMs / 1000)
+}
+
+// Seconds until the floor starts rising, or 0 once it has.
+function riseCountdown(state) {
+  if (!state.rising || state.riseMs >= RISE_GRACE_MS) return 0
+  return Math.max(1, Math.ceil((RISE_GRACE_MS - state.riseMs) / 1000))
+}
+
+function advanceRise(state, dtMs) {
+  state.riseMs += dtMs
+  var speed = riseSpeed(state)
+  if (speed === 0) return false
+  state.riseCarry += dtMs * speed / 1000
+  var rose = false
+  while (state.riseCarry >= 1 && state.status === "playing") {
+    state.riseCarry -= 1
+    raiseFloor(state)
+    rose = true
+  }
+  return rose
+}
+
+// Push every row up by one and add a floor row at the bottom. Anything
+// already in the top row has nowhere to go: the game is over.
+function raiseFloor(state) {
+  var cells = state.cells
+  for (var x = 0; x < WIDTH; x++) {
+    if (cells[x] !== 0) { endGame(state); return }
+  }
+  cells.copyWithin(0, WIDTH)
+  for (var i = (HEIGHT - 1) * WIDTH; i < cells.length; i++)
+    cells[i] = packCell(NO_COLOR, randomIndex(state.random, SHADES), FLOOR)
+  state.floorRows++
+  // The falling piece rides up with the board so it never ends up inside it.
+  var piece = state.piece
+  if (piece && !fits(state, piece.blocks, piece.x, piece.y)) piece.y--
+  state.sandActive = true
+}
+
+// Remove floor rows from the top; the sand above falls into the gap.
+function lowerFloor(state, rows) {
+  for (; rows > 0 && state.floorRows > 0; rows--) {
+    var top = (HEIGHT - state.floorRows) * WIDTH
+    state.cells.fill(0, top, top + WIDTH)
+    state.floorRows--
+    state.sandActive = true
+  }
 }
 
 // ------------------------------------------------------------------ groove
@@ -798,6 +871,8 @@ function update(state, dtMs, input) {
     advanceFlash(state, dtMs)
     return true
   }
+  var rose = state.rising && advanceRise(state, dtMs)
+  if (state.status !== "playing") return true
   if (state.flips && !state.pouring && countDownToFlip(state, dtMs)) return true
 
   var sand = settleSand(state, dtMs)
@@ -806,12 +881,12 @@ function update(state, dtMs, input) {
     advancePour(state, dtMs, sand.settled)
     return true
   }
-  if (!state.piece) return sand.changed
+  if (!state.piece) return sand.changed || rose
 
   var steered = steerPiece(state, dtMs, input)
   var fell = applyGravity(state, dtMs, input)
   var grounded = lockWhenGrounded(state, dtMs, input)
-  return sand.changed || steered || fell || grounded
+  return sand.changed || rose || steered || fell || grounded
 }
 
 function advanceFlash(state, dtMs) {
@@ -920,7 +995,7 @@ function takeEvents(state) {
 
 // Build the colour tables the renderer needs from base [r, g, b] colours.
 // sand:  one [r, g, b] base per sand colour
-// extra: { fire: [4 bases], acid: [2 bases], water, sprout, background }
+// extra: { fire: [4 bases], acid: [2 bases], water, sprout, floor, floorEdge, background }
 function buildPalette(sand, extra) {
   extra = extra || {}
   var water = extra.water || [80, 160, 220]
@@ -928,6 +1003,7 @@ function buildPalette(sand, extra) {
   var acid = extra.acid || [[120, 220, 90], [180, 250, 140]]
   var sprout = extra.sprout || [240, 250, 220]
   var background = extra.background || [20, 20, 28]
+  var floor = extra.floor || [70, 70, 80]
   function tones(rgb, factors) { return factors.map(function(f) { return scaleRgb(rgb, f) }) }
   return {
     sand: sand.map(function(rgb) { return tones(rgb, [0.80, 0.90, 1.0, 1.10]) }),
@@ -940,7 +1016,9 @@ function buildPalette(sand, extra) {
     }),
     fire: fire.map(function(rgb) { return rgb.slice() }),
     acid: [scaleRgb(acid[0], 0.75), scaleRgb(acid[0], 0.9), acid[0], acid[1]],
-    sprout: sprout.slice()
+    sprout: sprout.slice(),
+    floor: tones(floor, [0.7, 0.8, 0.9, 1.0]),
+    floorEdge: (extra.floorEdge || [220, 80, 60]).slice()
   }
 }
 
@@ -970,6 +1048,7 @@ function grainColor(palette, cell, index, frame) {
   case FIRE: return palette.fire[Math.min(3, shade + (flicker(index, frame) & 1))]
   case ACID: return palette.acid[acidTone(shade, index, frame)]
   case SPROUT: return palette.sprout
+  case FLOOR: return palette.floor[shade]
   default: return palette.sand[color][shade]
   }
 }
@@ -1002,6 +1081,7 @@ function blendPixel(pixels, index, rgb, alpha) {
 // theme: { background, grid, flash: [r, g, b], ghost: alpha }
 function render(state, pixels, palette, theme) {
   paintCells(state, pixels, palette, theme)
+  paintFloorEdge(state, pixels, palette)
   if (state.flashing !== null) paintFlash(state, pixels, theme.flash)
   if (!state.piece || state.status !== "playing") return
   paintGhost(state, pixels, palette, theme.ghost)
@@ -1016,6 +1096,14 @@ function paintCells(state, pixels, palette, theme) {
     var rgb = cell !== 0 ? grainColor(palette, cell, i, state.frame) : (onGridLine ? theme.grid : theme.background)
     putPixel(pixels, i, rgb)
   }
+}
+
+// The top of the rising floor glows so its height reads at a glance.
+function paintFloorEdge(state, pixels, palette) {
+  if (state.floorRows === 0) return
+  var top = (HEIGHT - state.floorRows) * WIDTH
+  var glow = 0.55 + 0.35 * Math.sin(state.frame / 12)
+  for (var x = 0; x < WIDTH; x++) blendPixel(pixels, top + x, palette.floorEdge, glow)
 }
 
 function paintFlash(state, pixels, flashRgb) {

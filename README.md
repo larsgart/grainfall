@@ -41,7 +41,8 @@ On the title screen, ↑ ↓ pick Easy (3 colours), Normal (4) or Hard (5); Ente
 
 ## Chaos modifiers
 
-Toggle each one on the title screen (F, E, M, or click). All three start on.
+Toggle each one on the title screen (F, E, M, R, or click). Flips, Elements
+and Groove start on; Rising starts off.
 
 - **Flips (F)** — every 30–55 seconds (sooner at higher levels) the board
   turns upside down after a 3-second warning. The pile pours back down, vines
@@ -62,6 +63,11 @@ Toggle each one on the title screen (F, E, M, or click). All three start on.
   knock loose grains sideways. This reads only the output's peak level
   through PipeWire (the same meter Omarchy's audio panel uses), only while a
   Groove game is on screen. Nothing is recorded or stored.
+- **Rising (R)** — after a calm 5 seconds the floor starts creeping up,
+  lifting the whole pile with it, and it keeps getting faster. Every region
+  you clear sinks it back one row, but sooner or later it wins: once the
+  pile is pushed against the top, the game is over. Acid can't eat the floor,
+  and a flip leaves it where it is.
 
 ## Rules
 
@@ -97,6 +103,7 @@ grain and scaled up with `drawImage` (Qt Quick's Canvas ignores
 ./scripts/check.sh            # engine tests + manifest validation
 ./scripts/run-dev.sh          # run in a throwaway Quickshell window
 GRAINFALL_DEV_AUTOSTART=1 GRAINFALL_DEV_CHAOS=1 ./scripts/run-dev.sh   # every piece an element, early flip
+GRAINFALL_DEV_AUTOSTART=1 GRAINFALL_DEV_CHAOS=1 GRAINFALL_DEV_RISE_MS=120000 ./scripts/run-dev.sh   # Rising on, 115 s in
 ```
 
 Dev runs keep their scores in a temporary file, never in your real one.

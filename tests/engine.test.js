@@ -8,7 +8,8 @@ function loadEngine() {
   const exportsList = ["GRAIN", "WIDTH", "HEIGHT", "newGame", "update", "shift", "rotate", "hardDrop", "fits",
     "findSpans", "sandStep", "render", "buildPalette", "packCell", "takeEvents", "dropDistance",
     "flip", "setGroove", "shake", "flipCountdown", "cellMaterial", "cellColor", "renderPreview",
-    "makePiece", "SAND", "WATER", "FIRE", "ACID", "SPROUT", "VINE"]
+    "makePiece", "SAND", "WATER", "FIRE", "ACID", "SPROUT", "VINE", "FLOOR",
+    "riseSpeed", "riseCountdown", "raiseFloor", "lowerFloor", "RISE_GRACE_MS", "RISE_PUSHBACK"]
   return new Function(source + "\nreturn {" + exportsList.join(",") + "}")()
 }
 
@@ -231,8 +232,62 @@ test("elements are dealt when enabled and never when disabled", () => {
   assert.strictEqual(offSpecial, 0)
 })
 
+test("rising: calm start, then the floor rises faster and faster", () => {
+  const s = emptyGame({ rising: true })
+  assert.strictEqual(E.riseCountdown(s), E.RISE_GRACE_MS / 1000)
+  for (let t = 0; t < E.RISE_GRACE_MS - 1000; t += 50) E.update(s, 50, {})
+  assert.strictEqual(s.floorRows, 0)
+  for (let t = 0; t < 2000; t += 50) E.update(s, 50, {})
+  assert.strictEqual(E.riseCountdown(s), 0)
+  const early = E.riseSpeed(s)
+  assert.ok(early > 0)
+  for (let t = 0; t < 60000; t += 50) E.update(s, 50, {})
+  assert.ok(E.riseSpeed(s) > early * 2, "speeds up over time")
+  assert.ok(s.floorRows > 5)
+  assert.strictEqual(E.riseSpeed(emptyGame()), 0, "off unless chosen")
+})
+
+test("rising: the floor lifts the pile and the piece, and the top ends the game", () => {
+  const s = E.newGame({ seed: 12, rising: true })
+  s.cells[at(5, E.HEIGHT - 1)] = E.packCell(0, 0)
+  const pieceY = s.piece.y
+  E.raiseFloor(s)
+  assert.strictEqual(s.floorRows, 1)
+  assert.ok(s.cells[at(5, E.HEIGHT - 2)] !== 0, "grain lifted one row")
+  assert.strictEqual(E.cellMaterial(s.cells[at(5, E.HEIGHT - 1)]), E.FLOOR)
+  assert.ok(s.piece.y <= pieceY && E.fits(s, s.piece.blocks, s.piece.x, s.piece.y))
+  settle(s, 50)
+  assert.strictEqual(count(s, c => E.cellMaterial(c) === E.FLOOR), E.WIDTH, "the floor never moves")
+  while (s.status === "playing" && s.floorRows < E.HEIGHT) E.raiseFloor(s)
+  assert.strictEqual(s.status, "over")
+})
+
+test("rising: clears push the floor back down", () => {
+  const s = emptyGame({ rising: true })
+  for (let i = 0; i < 10; i++) E.raiseFloor(s)
+  const y = E.HEIGHT - 11
+  for (let x = 0; x < E.WIDTH; x++) s.cells[at(x, y)] = E.packCell(0, 0)
+  s.sandActive = true
+  E.update(s, 16, {})
+  assert.ok(s.flashing !== null, "the run clears")
+  for (let i = 0; i < 40 && s.flashing; i++) E.update(s, 16, {})
+  assert.strictEqual(s.floorRows, 10 - E.RISE_PUSHBACK)
+})
+
+test("rising: acid cannot eat the floor and a flip leaves it at the bottom", () => {
+  const s = emptyGame({ rising: true, flips: true })
+  for (let i = 0; i < 3; i++) E.raiseFloor(s)
+  s.cells[at(5, E.HEIGHT - 4)] = E.packCell(-1, 3, E.ACID)
+  settle(s, 400)
+  assert.strictEqual(count(s, c => E.cellMaterial(c) === E.FLOOR), 3 * E.WIDTH)
+  s.cells[at(9, E.HEIGHT - 4)] = E.packCell(0, 0)
+  E.flip(s)
+  assert.ok(s.cells[at(9, 0)] !== 0, "pile mirrored above the floor")
+  for (let x = 0; x < E.WIDTH; x++) assert.strictEqual(E.cellMaterial(s.cells[at(x, E.HEIGHT - 1)]), E.FLOOR)
+})
+
 test("chaotic random play with every modifier ends without throwing", () => {
-  const s = E.newGame({ seed: 9, flips: true, elements: true })
+  const s = E.newGame({ seed: 9, flips: true, elements: true, rising: true })
   let frames = 0, flips = 0
   const rand = inputRandom(777)
   while (s.status === "playing" && frames < 200000) {
@@ -246,7 +301,7 @@ test("chaotic random play with every modifier ends without throwing", () => {
     frames++
   }
   assert.strictEqual(s.status, "over")
-  console.log("   frames:", frames, "score:", s.score, "clears:", s.clears, "flips:", flips, "burned:", s.burned, "dyed:", s.dyed, "dissolved:", s.dissolved)
+  console.log("   frames:", frames, "score:", s.score, "clears:", s.clears, "flips:", flips, "burned:", s.burned, "dyed:", s.dyed, "dissolved:", s.dissolved, "floor:", s.floorRows)
 })
 
 console.log(passed + " tests passed")

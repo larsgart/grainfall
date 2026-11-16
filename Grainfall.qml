@@ -27,6 +27,10 @@ Item {
   property int flipCountdown: 0
   property string nextMaterial: "sand"
   property bool gameGroove: false        // Groove as chosen when this game started
+  property bool gameRising: false        // Rising as chosen when this game started
+  property real floorHeight: 0           // 0..1 of the board the rising floor fills
+  property int riseCountdown: 0          // seconds until the floor starts to rise
+  property real riseFactor: 0            // rise speed relative to its starting speed
 
   property bool leftHeld: false
   property bool rightHeld: false
@@ -44,7 +48,8 @@ Item {
   readonly property var modifiers: [
     { key: "flips", letter: "F" },
     { key: "elements", letter: "E" },
-    { key: "groove", letter: "M" }
+    { key: "groove", letter: "M" },
+    { key: "rising", letter: "R" }
   ]
 
   // ---------------------------------------------------------------- theme
@@ -78,6 +83,8 @@ Item {
       fire: [red, t.orange || Qt.tint(red, "#80f0a040"), yellow, t.bright_yellow || Qt.tint(yellow, "#80ffffff")].map(rgbOf),
       acid: [acid, Qt.tint(acid, "#90ffffff")].map(rgbOf),
       water: rgbOf(t.bright_cyan || t.cyan || accent),
+      floor: rgbOf(Qt.tint(boardColor, alpha(muted, 0.55))),
+      floorEdge: rgbOf(t.orange || red),
       sprout: rgbOf(t.bright_foreground || foreground),
       background: rgbOf(boardColor)
     })
@@ -152,6 +159,7 @@ Item {
     property bool flips: true
     property bool elements: true
     property bool groove: true
+    property bool rising: false
   }
 
   function bestFor(index) { return best[difficulties[index].key] || 0 }
@@ -252,8 +260,10 @@ Item {
     game = Engine.newGame({
       colors: difficulties[difficulty].colors,
       flips: prefs.flips,
-      elements: prefs.elements
+      elements: prefs.elements,
+      rising: prefs.rising
     })
+    gameRising = prefs.rising
     gameGroove = prefs.groove
     grooveFast = 0
     grooveSlow = 0
@@ -289,6 +299,9 @@ Item {
     paused = false
     over = false
     flipCountdown = 0
+    floorHeight = 0
+    riseCountdown = 0
+    riseFactor = 0
     nextMaterial = "sand"
     shownNext = null
     resetHeld()
@@ -337,7 +350,14 @@ Item {
     handleEvents()
     if (changed) board.requestPaint()
     flipCountdown = Engine.flipCountdown(game)
+    if (gameRising) syncRising()
     refreshPreview()
+  }
+
+  function syncRising() {
+    floorHeight = game.floorRows / Engine.HEIGHT
+    riseCountdown = Engine.riseCountdown(game)
+    riseFactor = Engine.riseSpeed(game) / Engine.RISE_START_SPEED
   }
 
   function refreshPreview() {
@@ -426,6 +446,7 @@ Item {
     else if (key === Qt.Key_F) toggleModifier("flips")
     else if (key === Qt.Key_E) toggleModifier("elements")
     else if (key === Qt.Key_M) toggleModifier("groove")
+    else if (key === Qt.Key_R) toggleModifier("rising")
     else if (isActivateKey(key)) startGame()
     else return false
     return true
@@ -1043,6 +1064,34 @@ Item {
                 wrapMode: Text.WordWrap
                 text: strings.t(root.grooveActive ? "groove.listening" : "groove.silent")
                 color: root.muted
+                font.pixelSize: 10
+              }
+            }
+
+            Column {
+              visible: root.view === "game" && root.gameRising
+              width: layout.sideWidth
+              spacing: 4
+              SectionLabel { text: strings.t("stat.rising") }
+              Rectangle {
+                width: parent.width
+                height: 6
+                radius: 3
+                color: root.hairline
+                Rectangle {
+                  height: parent.height
+                  radius: 3
+                  width: parent.width * Math.min(1, root.floorHeight)
+                  color: root.floorHeight > 0.4 ? root.urgent : root.accent
+                }
+              }
+              PlainText {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: root.riseCountdown > 0
+                  ? strings.t("rising.waiting").arg(root.riseCountdown)
+                  : strings.t("rising.speed").arg(root.riseFactor.toFixed(1))
+                color: root.riseFactor >= 4 ? root.urgent : root.muted
                 font.pixelSize: 10
               }
             }
