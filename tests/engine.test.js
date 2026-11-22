@@ -62,6 +62,9 @@ test("a wall-to-wall run of one colour clears; mixed colours do not", () => {
   E.update(s, 16, {})
   assert.ok(s.flashing && s.flashing.length === E.WIDTH)
   assert.ok(s.score > 0)
+  assert.ok(s.flashing.every(i => s.cells[i] === 0), "cleared grains go at once")
+  const x = s.piece.x
+  assert.ok(E.shift(s, -1) && s.piece.x === x - 1, "play does not pause for the clear")
   for (let t = 0; t < 40; t++) E.update(s, 16, {})
   assert.strictEqual(s.flashing, null)
 })

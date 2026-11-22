@@ -24,7 +24,7 @@ var SHADES = 4
 var MAX_FRAME_MS = 50
 var LOCK_MS = 260
 var MAX_LOCK_RESETS = 10
-var FLASH_MS = 420
+var FLASH_MS = 260
 var CLEARS_PER_LEVEL = 4
 var HARD_DROP_POINTS_PER_ROW = 2
 var MOVE_SPEED = 96          // grains per second while a direction is held
@@ -223,7 +223,6 @@ function newGame(options) {
     floorRows: 0,
     riseMs: 0,
     riseCarry: 0,
-    floorDrop: 0,
     groove: { active: false, slide: 1, liquid: 0 },
     shake: 0,
     frame: 0,
@@ -331,7 +330,7 @@ function fits(state, blocks, px, py) {
 // ---------------------------------------------------------------- controls
 
 function canAct(state) {
-  return state.status === "playing" && !state.paused && state.piece !== null && state.flashing === null
+  return state.status === "playing" && !state.paused && state.piece !== null
 }
 
 // Moving a grounded piece buys it more time before it locks, a few times over.
@@ -709,21 +708,15 @@ function startClear(state, spans) {
   state.chain++
   state.bestChain = Math.max(state.bestChain, state.chain)
   state.clears += spans.length
-  if (state.rising) state.floorDrop += spans.length * RISE_PUSHBACK
   var points = grains.length * state.chain * state.level * bonus
   state.score += points
   state.level = Math.max(state.level, 1 + Math.floor(state.clears / CLEARS_PER_LEVEL))
-  state.flashing = grains
+  for (var i = 0; i < grains.length; i++) state.cells[grains[i]] = 0
+  state.sandActive = true
+  if (state.rising) lowerFloor(state, spans.length * RISE_PUSHBACK)
+  state.flashing = grains   // a brief afterglow; play carries on underneath
   state.flashMs = 0
   state.events.push({ type: "clear", grains: grains.length, chain: state.chain, points: points, flip: bonus > 1 })
-}
-
-function finishClear(state) {
-  for (var i = 0; i < state.flashing.length; i++) state.cells[state.flashing[i]] = 0
-  state.flashing = null
-  state.sandActive = true
-  lowerFloor(state, state.floorDrop)
-  state.floorDrop = 0
 }
 
 // ------------------------------------------------------------------- flips
@@ -867,31 +860,30 @@ function update(state, dtMs, input) {
   dtMs = Math.min(dtMs, MAX_FRAME_MS)
   input = input || {}
 
-  if (state.flashing !== null) {
-    advanceFlash(state, dtMs)
-    return true
-  }
+  var glowing = advanceFlash(state, dtMs)
   var rose = state.rising && advanceRise(state, dtMs)
   if (state.status !== "playing") return true
   if (state.flips && !state.pouring && countDownToFlip(state, dtMs)) return true
 
   var sand = settleSand(state, dtMs)
-  if (state.flashing !== null) return true
   if (state.pouring) {
     advancePour(state, dtMs, sand.settled)
     return true
   }
-  if (!state.piece) return sand.changed || rose
+  if (!state.piece) return sand.changed || rose || glowing
 
   var steered = steerPiece(state, dtMs, input)
   var fell = applyGravity(state, dtMs, input)
   var grounded = lockWhenGrounded(state, dtMs, input)
-  return sand.changed || rose || steered || fell || grounded
+  return sand.changed || rose || glowing || steered || fell || grounded
 }
 
+// Returns whether a clear's afterglow is still showing.
 function advanceFlash(state, dtMs) {
+  if (state.flashing === null) return false
   state.flashMs += dtMs
-  if (state.flashMs >= FLASH_MS) finishClear(state)
+  if (state.flashMs >= FLASH_MS) state.flashing = null
+  return true
 }
 
 function countDownToFlip(state, dtMs) {
@@ -1106,10 +1098,13 @@ function paintFloorEdge(state, pixels, palette) {
   for (var x = 0; x < WIDTH; x++) blendPixel(pixels, top + x, palette.floorEdge, glow)
 }
 
+// One flash that fades out over the cleared grains.
 function paintFlash(state, pixels, flashRgb) {
-  var flashOn = Math.floor(state.flashMs / 70) % 2 === 0
-  if (!flashOn) return
-  for (var i = 0; i < state.flashing.length; i++) putPixel(pixels, state.flashing[i], flashRgb)
+  var strength = 1 - state.flashMs / FLASH_MS
+  for (var i = 0; i < state.flashing.length; i++) {
+    var index = state.flashing[i]
+    if (state.cells[index] === 0) blendPixel(pixels, index, flashRgb, strength)   // never over sand that has moved in
+  }
 }
 
 // A faint copy of the piece where a hard drop would put it.
